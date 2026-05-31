@@ -9,3 +9,9 @@
 .env
 .env.*
 !.env.example
+
+# Python (Phase 4 simulation suite)
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+backtest_executed.ipynb
