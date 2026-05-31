@@ -3,11 +3,20 @@ pragma solidity ^0.8.20;
 
 import "./DynamicFeePool.sol";
 
-/// @notice Canonical registry — deploys and indexes every DynamicFeePool instance.
+/**
+ * The entry point for creating new Dynamic-Fee-AMM trading pairs.
+ *
+ * Call createPool(tokenA, tokenB) to deploy a fresh DynamicFeePool for any
+ * two ERC-20 tokens. The factory prevents duplicate pools and keeps a
+ * bidirectional registry, so you can look up the same pool regardless of
+ * which token you pass first.
+ */
 contract PoolFactory {
-    /// @notice getPool[token0][token1] == getPool[token1][token0] == pool address.
+    // Look up a pool by its two tokens — order doesn't matter.
+    // getPool[USDC][WETH] and getPool[WETH][USDC] both point to the same pool.
     mapping(address => mapping(address => address)) public getPool;
 
+    // Every pool ever created, in deployment order.
     address[] public allPools;
 
     event PoolCreated(
@@ -21,16 +30,13 @@ contract PoolFactory {
     error ZeroAddress();
     error PoolAlreadyExists(address pool);
 
-    /// @notice Deploys a new DynamicFeePool for the given token pair.
-    /// @dev    Tokens are sorted so getPool[A][B] === getPool[B][A].
-    /// @param  tokenA  One token of the pair (order-independent).
-    /// @param  tokenB  The other token of the pair.
-    /// @return pool    Address of the newly deployed DynamicFeePool.
+    // Deploy a new pool for the given token pair.
+    // Tokens are sorted internally so the registry is always consistent.
     function createPool(address tokenA, address tokenB) external returns (address pool) {
         if (tokenA == tokenB) revert IdenticalAddresses();
         if (tokenA == address(0) || tokenB == address(0)) revert ZeroAddress();
 
-        // Canonical ordering: lower address is always token0
+        // Always store the lower address as token0 so getPool[A][B] == getPool[B][A].
         (address token0, address token1) = tokenA < tokenB
             ? (tokenA, tokenB)
             : (tokenB, tokenA);
@@ -39,7 +45,6 @@ contract PoolFactory {
 
         pool = address(new DynamicFeePool(token0, token1));
 
-        // Bidirectional index so callers need not pre-sort
         getPool[token0][token1] = pool;
         getPool[token1][token0] = pool;
         allPools.push(pool);
@@ -47,7 +52,7 @@ contract PoolFactory {
         emit PoolCreated(token0, token1, pool, allPools.length);
     }
 
-    /// @notice Returns the total number of deployed pools.
+    // How many pools have been deployed so far.
     function allPoolsLength() external view returns (uint256) {
         return allPools.length;
     }
