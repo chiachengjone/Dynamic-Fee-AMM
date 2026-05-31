@@ -1,0 +1,11 @@
+# Foundry build artifacts
+/out/
+/cache/
+
+# Deployment broadcast logs (may contain private key traces)
+/broadcast/
+
+# Local environment variables
+.env
+.env.*
+!.env.example

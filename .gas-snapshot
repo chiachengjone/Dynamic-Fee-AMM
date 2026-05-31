@@ -1,0 +1,6 @@
+PoolFactoryTest:test_CreatePool() (gas: 817938)
+PoolFactoryTest:test_CreatePool_Revert_DuplicatePool() (gas: 818269)
+PoolFactoryTest:test_CreatePool_Revert_IdenticalAddresses() (gas: 10808)
+PoolFactoryTest:test_CreatePool_Revert_ZeroAddress_Token0() (gas: 10882)
+PoolFactoryTest:test_CreatePool_Revert_ZeroAddress_Token1() (gas: 10936)
+PoolFactoryTest:test_CreatePool_TokenOrderIsNormalized() (gas: 2631240)
