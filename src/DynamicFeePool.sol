@@ -9,12 +9,14 @@ import "./LPToken.sol";
 /**
  * The core liquidity pool for the Dynamic-Fee-AMM.
  *
- * This is a constant-product AMM — the classic x * y = k design made famous
- * by Uniswap V2. Liquidity providers deposit pairs of tokens, traders swap
- * one for the other, and a 0.3% fee stays in the pool to reward LPs.
+ * This is a constant-product AMM (x * y = k) with a volatility-responsive fee.
+ * Liquidity providers deposit pairs of tokens, traders swap one for the other,
+ * and the fee stays in the pool to reward LPs.
  *
- * Phase 2 ships a static 0.3% fee. Phase 3 will replace it with a dynamic
- * fee that scales with on-chain volatility via calculateDynamicFee().
+ * Phase 2 shipped a static 0.30% fee. Phase 3 replaces it with a dynamic fee
+ * that scales from 0.30% (calm market) to 1.50% (high-frequency storm) based
+ * on an on-chain exponential moving average of trading intensity. This protects
+ * LPs from impermanent loss and MEV extraction during volatile periods.
  */
 contract DynamicFeePool {
     using SafeERC20 for IERC20;
@@ -31,14 +33,49 @@ contract DynamicFeePool {
     uint112 private reserve0;
     uint112 private reserve1;
 
-    // The 0.3% fee expressed as a numerator/denominator pair.
-    // amountIn is multiplied by 9970/10000, so 0.3% stays in the pool.
-    uint256 private constant FEE_NUMERATOR   = 9970;
+    // -------------------------------------------------------------------------
+    // Dynamic fee constants
+    // -------------------------------------------------------------------------
+
+    // Fee denominator — all fee math is in basis points (1 bps = 0.01%).
     uint256 private constant FEE_DENOMINATOR = 10000;
+
+    // Fee floor and ceiling, in basis points.
+    uint16 public constant BASE_FEE = 30;    // 0.30% — charged during market equilibrium
+    uint16 public constant MAX_FEE  = 150;   // 1.50% — hard cap during high-frequency periods
+
+    // One EMA half-life: accumulated volatility decays by 50% every 60 seconds.
+    uint32 public constant DECAY_HALFLIFE = 60;
+
+    // Fee sensitivity: fee premium = volatility * ALPHA / SCALE.
+    // Calibrated so an 80% whale trade (priceImpact = 8000) hits MAX_FEE exactly:
+    //   30 + 8000 * 15 / 1000 = 150
+    uint256 private constant VOLATILITY_ALPHA = 15;
+    uint256 private constant VOLATILITY_SCALE = 1000;
+
+    // -------------------------------------------------------------------------
+    // Volatility oracle state
+    // -------------------------------------------------------------------------
+
+    // Block timestamp of the last swap. Used to compute EMA time decay.
+    uint32  public lastTransactionTimestamp;
+
+    // EMA-style accumulator tracking recent trading intensity.
+    // Updated at the end of every swap; decays exponentially between swaps.
+    uint112 public cumulativeVolatilityTracker;
+
+    // -------------------------------------------------------------------------
+    // Events
+    // -------------------------------------------------------------------------
 
     event LiquidityAdded(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
     event LiquidityRemoved(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
     event Swap(address indexed sender, address indexed tokenIn, uint256 amountIn, uint256 amountOut);
+    event FeeUpdated(uint256 feeBps, uint256 volatilityAccumulator);
+
+    // -------------------------------------------------------------------------
+    // Errors
+    // -------------------------------------------------------------------------
 
     error InvalidToken(address provided);
     error InsufficientOutputAmount(uint256 actual, uint256 minimum);
@@ -153,9 +190,12 @@ contract DynamicFeePool {
     /**
      * Swap an exact amount of one token for as many of the other as the pool allows.
      *
+     * The fee charged is dynamic — it starts at 0.30% during calm conditions and
+     * rises towards 1.50% as same-block trading frequency increases. This discourages
+     * high-frequency sandwiching while keeping costs low for ordinary traders.
+     *
      * Pass minAmountOut to protect yourself from slippage — the transaction reverts
-     * if the pool can't give you at least that much. A safe minimum is your expected
-     * output minus a small tolerance (e.g. 0.5–1%).
+     * if the pool can't give you at least that much.
      *
      * You must approve this contract to spend your input token before calling this.
      */
@@ -173,7 +213,11 @@ contract DynamicFeePool {
         (uint256 reserveIn, uint256 reserveOut) = zeroForOne ? (r0, r1) : (r1, r0);
         address tokenOut = zeroForOne ? token1 : token0;
 
-        amountOut = getAmountOut(amountIn, reserveIn, reserveOut);
+        // Compute the volatility-adjusted fee before any state changes.
+        (uint256 feeBps, uint256 newVolatility) = calculateDynamicFee(amountIn, reserveIn);
+        uint256 feeMul = FEE_DENOMINATOR - feeBps;
+
+        amountOut = getAmountOut(amountIn, reserveIn, reserveOut, feeMul);
 
         if (amountOut < minAmountOut) revert InsufficientOutputAmount(amountOut, minAmountOut);
 
@@ -188,7 +232,12 @@ contract DynamicFeePool {
             reserve0 = uint112(r0 - amountOut);
         }
 
+        // Persist volatility state after the swap is complete.
+        cumulativeVolatilityTracker = uint112(Math.min(newVolatility, type(uint112).max));
+        lastTransactionTimestamp    = uint32(block.timestamp);
+
         emit Swap(msg.sender, tokenIn, amountIn, amountOut);
+        emit FeeUpdated(feeBps, newVolatility);
     }
 
     // -------------------------------------------------------------------------
@@ -196,33 +245,53 @@ contract DynamicFeePool {
     // -------------------------------------------------------------------------
 
     /**
+     * Compute the current fee in basis points using a two-factor volatility model.
+     *
+     * Step 1 — Time decay: historical volatility decays by 50% every DECAY_HALFLIFE
+     * seconds via a right-bit-shift approximation (x >> n ≈ x / 2^n).
+     *
+     * Step 2 — Price impact: the current trade's footprint (amountIn as a fraction
+     * of the pool) is added to the decayed baseline.
+     *
+     * Step 3 — Fee: BASE_FEE plus a scaled fraction of the combined volatility,
+     * clamped strictly between BASE_FEE and MAX_FEE.
+     */
+    function calculateDynamicFee(
+        uint256 amountIn,
+        uint256 reserveIn
+    ) internal view returns (uint256 feeBps, uint256 newVolatility) {
+        uint32  timeElapsed      = uint32(block.timestamp) - lastTransactionTimestamp;
+        uint256 shift            = uint256(timeElapsed / DECAY_HALFLIFE);
+        // Guard: shifting a uint112 by >= 112 bits is always 0.
+        uint256 decayedVolatility = shift >= 112
+            ? 0
+            : uint256(cumulativeVolatilityTracker) >> shift;
+
+        uint256 priceImpact = (amountIn * 10000) / reserveIn;
+        newVolatility       = decayedVolatility + priceImpact;
+
+        uint256 rawFee = uint256(BASE_FEE) + (newVolatility * VOLATILITY_ALPHA / VOLATILITY_SCALE);
+        feeBps = Math.max(Math.min(rawFee, uint256(MAX_FEE)), uint256(BASE_FEE));
+    }
+
+    /**
      * How many output tokens does the pool owe for a given input?
      *
-     * This is the rearranged constant-product formula with the 0.3% fee applied:
+     * This is the rearranged constant-product formula with the caller-supplied fee applied:
      *
-     *   amountOut = (reserveOut * amountIn * 9970) / (reserveIn * 10000 + amountIn * 9970)
+     *   amountOut = (reserveOut * amountIn * feeMul) / (reserveIn * 10000 + amountIn * feeMul)
      *
-     * Multiplying amountIn by 9970 (instead of 10000) is how the fee is deducted —
-     * the "missing" 0.3% stays in the pool, growing the reserves and rewarding LPs.
+     * feeMul = 10000 - feeBps, so the "missing" fee fraction stays in the pool,
+     * growing the reserves and rewarding LPs.
      */
     function getAmountOut(
         uint256 amountIn,
         uint256 reserveIn,
-        uint256 reserveOut
+        uint256 reserveOut,
+        uint256 feeMul
     ) internal pure returns (uint256 amountOut) {
-        uint256 amountInWithFee = amountIn * FEE_NUMERATOR;
+        uint256 amountInWithFee = amountIn * feeMul;
         amountOut = (reserveOut * amountInWithFee) / (reserveIn * FEE_DENOMINATOR + amountInWithFee);
-    }
-
-    /**
-     * Phase 3 placeholder — will return a volatility-scaled fee in basis points.
-     *
-     * The idea: when the market is calm, charge less. When volatility spikes,
-     * charge more to protect LPs from impermanent loss. For now it returns 0
-     * and the static 0.3% in getAmountOut is what actually gets used.
-     */
-    function calculateDynamicFee() internal view returns (uint256 fee) {
-        return 0;
     }
 
     // -------------------------------------------------------------------------

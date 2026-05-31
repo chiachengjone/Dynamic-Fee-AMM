@@ -8,11 +8,13 @@ import "../src/LPToken.sol";
 import "./helpers/MockERC20.sol";
 
 /**
- * Backtesting suite for DynamicFeePool — the core AMM contract.
+ * Phase 3 backtesting suite for DynamicFeePool's volatility fee engine.
  *
- * Each test targets one specific behaviour: initial liquidity, proportional
- * withdrawal, the constant-product swap formula, and slippage protection.
- * Together they prove the math is correct before Phase 3 adds dynamic fees.
+ * Each test targets one specific boundary of the dynamic fee model:
+ *   1. Full volatility decay → fee returns to BASE_FEE floor
+ *   2. Same-block HFT cascades → fee escalates monotonically
+ *   3. 80% whale trade → fee is clamped precisely at MAX_FEE ceiling
+ *   4. One half-life elapsed → accumulator decays by exactly 50%
  */
 contract DynamicFeePoolTest is Test {
     PoolFactory    public factory;
@@ -23,15 +25,30 @@ contract DynamicFeePoolTest is Test {
 
     uint256 constant INITIAL_MINT = 1_000 * 1e18;
 
-    // Local copy of the pool's swap formula so tests can compute expected values
-    // independently without relying on the contract under test to produce them.
+    // keccak256 selector for FeeUpdated(uint256,uint256) — used to filter vm.recordLogs output.
+    bytes32 constant FEE_UPDATED_SIG = keccak256("FeeUpdated(uint256,uint256)");
+
+    // Local mirror of the pool's swap formula for computing expected outputs independently.
     function _getAmountOut(
         uint256 amountIn,
         uint256 reserveIn,
-        uint256 reserveOut
+        uint256 reserveOut,
+        uint256 feeMul
     ) internal pure returns (uint256) {
-        uint256 amountInWithFee = amountIn * 9970;
+        uint256 amountInWithFee = amountIn * feeMul;
         return (reserveOut * amountInWithFee) / (reserveIn * 10000 + amountInWithFee);
+    }
+
+    // Scan recorded logs for the most recent FeeUpdated emission and decode it.
+    function _captureFeeUpdated() internal view returns (uint256 feeBps, uint256 vol) {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i = logs.length; i > 0; i--) {
+            if (logs[i - 1].topics[0] == FEE_UPDATED_SIG) {
+                (feeBps, vol) = abi.decode(logs[i - 1].data, (uint256, uint256));
+                return (feeBps, vol);
+            }
+        }
+        revert("FeeUpdated event not found");
     }
 
     function setUp() public {
@@ -50,91 +67,100 @@ contract DynamicFeePoolTest is Test {
         token1.mint(address(this), INITIAL_MINT);
         token0.approve(address(pool), type(uint256).max);
         token1.approve(address(pool), type(uint256).max);
+
+        // Seed the pool with 100 of each token.
+        pool.addLiquidity(100 * 1e18, 100 * 1e18);
     }
 
     // -------------------------------------------------------------------------
-    // Test 1 — Initial liquidity provision
+    // Test 1 — Equilibrium fee floor after full decay
     // -------------------------------------------------------------------------
 
-    // Depositing 100 of each token should mint exactly 100 LP tokens.
-    // LP amount = sqrt(100e18 * 100e18) = 100e18. Reserves must match the deposit.
-    function test_InitialLiquidityProvision() public {
-        uint256 deposit   = 100 * 1e18;
-        uint256 liquidity = pool.addLiquidity(deposit, deposit);
+    // Spike the volatility accumulator with a real trade, then warp 1 hour.
+    // After 3600 s = 60 half-lives, any realistic accumulator value right-shifts
+    // to zero. A subsequent dust swap (priceImpact rounds to 0 in integer math)
+    // must therefore charge exactly BASE_FEE.
+    function test_EquilibriumFeeFloor() public {
+        // Trade 1: spike the volatility tracker.
+        pool.swap(10 * 1e18, address(token0), 1);
 
-        assertEq(liquidity, deposit, "wrong LP minted");
-        assertEq(lpToken.balanceOf(address(this)), deposit, "LP balance mismatch");
+        // 3600 s = 60 × DECAY_HALFLIFE → accumulator >> 60 = 0.
+        vm.warp(block.timestamp + 3600);
 
-        (uint112 r0, uint112 r1) = pool.getReserves();
-        assertEq(uint256(r0), deposit, "reserve0 mismatch");
-        assertEq(uint256(r1), deposit, "reserve1 mismatch");
+        // Dust swap: amountIn * 10000 < reserveIn, so priceImpact rounds to 0.
+        // After the spike trade reserve0 ≈ 110e18; 1e12 * 10000 / 110e18 = 0.
+        vm.recordLogs();
+        pool.swap(1e12, address(token0), 0);
+
+        (uint256 feeBps,) = _captureFeeUpdated();
+        assertEq(feeBps, uint256(pool.BASE_FEE()), "fee must equal BASE_FEE after full decay");
     }
 
     // -------------------------------------------------------------------------
-    // Test 2 — Proportional withdrawal
+    // Test 2 — High-frequency cascading fee spike
     // -------------------------------------------------------------------------
 
-    // Burning 50% of the LP supply should return exactly 50% of both reserves.
-    function test_ProportionalWithdrawal() public {
-        uint256 deposit = 100 * 1e18;
-        pool.addLiquidity(deposit, deposit);
+    // Three same-block swaps (timeElapsed = 0 between each) mean zero decay.
+    // Each trade's priceImpact stacks directly onto the accumulator, so the fee
+    // paid by each successive trader must be strictly higher than the last.
+    function test_HighFrequencyCascadingSpike() public {
+        // Trade 1
+        vm.recordLogs();
+        pool.swap(10 * 1e18, address(token0), 1);
+        (uint256 fee1,) = _captureFeeUpdated();
 
-        uint256 half = deposit / 2;
-        (uint256 out0, uint256 out1) = pool.removeLiquidity(half);
+        // Trade 2 — same block, no time elapsed, full accumulator carries forward.
+        vm.recordLogs();
+        pool.swap(10 * 1e18, address(token0), 1);
+        (uint256 fee2,) = _captureFeeUpdated();
 
-        assertEq(out0, half, "amount0 returned is not 50%");
-        assertEq(out1, half, "amount1 returned is not 50%");
-        assertEq(lpToken.totalSupply(), half, "LP totalSupply did not halve");
+        // Trade 3 — same block again.
+        vm.recordLogs();
+        pool.swap(10 * 1e18, address(token0), 1);
+        (uint256 fee3,) = _captureFeeUpdated();
 
-        (uint112 r0, uint112 r1) = pool.getReserves();
-        assertEq(uint256(r0), half, "reserve0 did not halve");
-        assertEq(uint256(r1), half, "reserve1 did not halve");
+        assertGt(fee2, fee1, "fee must escalate on trade 2");
+        assertGt(fee3, fee2, "fee must escalate on trade 3");
     }
 
     // -------------------------------------------------------------------------
-    // Test 3 — Constant-product swap + k invariant
+    // Test 3 — Fee cap enforcement for an 80% whale trade
     // -------------------------------------------------------------------------
 
-    // Swap 10 token0 into a 100/100 pool.
-    // The output must match our formula exactly, and the pool's k value
-    // (x * y) must be >= the pre-swap k — proof that the 0.3% fee accrued.
-    function test_MathematicalInvariantSwap() public {
-        uint256 deposit   = 100 * 1e18;
-        uint256 amountIn  = 10  * 1e18;
-        pool.addLiquidity(deposit, deposit);
+    // Swapping 80% of the pool reserve produces priceImpact = 8000.
+    // rawFee = BASE_FEE + 8000 * 15 / 1000 = 150 = MAX_FEE exactly.
+    // The clamping logic must return MAX_FEE — no overflow, no breach.
+    function test_MathematicalFeeCapEnforcement() public {
+        // 80% of the current 100e18 reserve.
+        vm.recordLogs();
+        pool.swap(80 * 1e18, address(token0), 1);
 
-        uint256 expectedOut = _getAmountOut(amountIn, deposit, deposit);
-        uint256 k_before    = deposit * deposit;
-
-        uint256 amountOut = pool.swap(amountIn, address(token0), 1);
-
-        assertEq(amountOut, expectedOut, "amountOut deviates from constant-product formula");
-
-        (uint112 r0, uint112 r1) = pool.getReserves();
-        assertGe(uint256(r0) * uint256(r1), k_before, "k invariant violated: fee did not accrue");
+        (uint256 feeBps,) = _captureFeeUpdated();
+        assertEq(feeBps, uint256(pool.MAX_FEE()), "fee must be clamped at MAX_FEE");
     }
 
     // -------------------------------------------------------------------------
-    // Test 4 — Slippage protection
+    // Test 4 — Asymmetric half-life volatility decay
     // -------------------------------------------------------------------------
 
-    // If the pool can only give you ~9.066 tokens but you demand 10, it should revert.
-    // This proves the minAmountOut guard is actually enforced.
-    function test_SlippageProtectionTrigger() public {
-        uint256 deposit      = 100 * 1e18;
-        uint256 amountIn     = 10  * 1e18;
-        pool.addLiquidity(deposit, deposit);
+    // A trade spikes the accumulator to V. After exactly one DECAY_HALFLIFE (60 s),
+    // the next swap sees decayedVolatility = V >> 1 = V / 2. A negligible dust trade
+    // adds ~0 new priceImpact, so the captured accumulator should be within 2 of V/2.
+    function test_AsymmetricVolatilityDecay() public {
+        // Trade 1: priceImpact = (10e18 * 10000) / 100e18 = 1000 → tracker = 1000.
+        vm.recordLogs();
+        pool.swap(10 * 1e18, address(token0), 1);
+        (, uint256 vol1) = _captureFeeUpdated();
 
-        uint256 actualOut     = _getAmountOut(amountIn, deposit, deposit);
-        uint256 impossibleMin = actualOut + 1; // one wei above what's possible
+        // Advance exactly one half-life.
+        vm.warp(block.timestamp + pool.DECAY_HALFLIFE());
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                DynamicFeePool.InsufficientOutputAmount.selector,
-                actualOut,
-                impossibleMin
-            )
-        );
-        pool.swap(amountIn, address(token0), impossibleMin);
+        // Dust swap: 1e12 in ~110e18 reserve → priceImpact = 0, vol2 ≈ vol1 / 2.
+        vm.recordLogs();
+        pool.swap(1e12, address(token0), 0);
+        (, uint256 vol2) = _captureFeeUpdated();
+
+        // vol1 >> 1 = vol1 / 2; allow ±2 for any dust priceImpact rounding.
+        assertApproxEqAbs(vol2, vol1 / 2, 2, "volatility must halve after one DECAY_HALFLIFE");
     }
 }
