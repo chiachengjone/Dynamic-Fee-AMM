@@ -1,0 +1,33 @@
+{
+  "name": "dynamic-fee-amm-dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Phase 6 — React dashboard & UI sandbox for the Dynamic-Fee-AMM protocol",
+  "scripts": {
+    "dev": "vite",
+    "dev:all": "concurrently -n dashboard,pipeline -c cyan,yellow \"vite\" \"cd ../simulation && .venv/bin/python macro_pipeline.py --serve\"",
+    "dev:live": "concurrently -n dashboard,relayer -c cyan,yellow \"vite\" \"cd ../simulation && .venv/bin/python macro_pipeline.py --serve --broadcast --interval 300\"",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "ethers": "^6.13.4",
+    "lucide-react": "^0.460.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.13.3",
+    "tailwind-merge": "^2.5.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "tailwindcss": "^4.0.0",
+    "concurrently": "^9.1.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}

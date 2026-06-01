@@ -23,6 +23,12 @@ runs = 1000
 [profile.ci]
 fuzz = { runs = 10_000 }
 
+[rpc_endpoints]
+sepolia = "${SEPOLIA_RPC_URL}"
+
+[etherscan]
+sepolia = { key = "${ETHERSCAN_API_KEY}" }
+
 [fmt]
 line_length    = 120
 tab_width      = 4

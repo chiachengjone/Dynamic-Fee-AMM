@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./LPToken.sol";
 
 /**
@@ -21,7 +22,7 @@ import "./LPToken.sol";
  * derived from real-world signals (Fear & Greed index, anomalous volume) that
  * scales all protocol fees upward during detected macroeconomic stress events.
  */
-contract DynamicFeePool {
+contract DynamicFeePool is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // -------------------------------------------------------------------------
@@ -139,14 +140,15 @@ contract DynamicFeePool {
     /**
      * Push a new macro chaos multiplier from the off-chain relayer pipeline.
      *
-     * The value must strictly exceed the neutral baseline (100) and not breach
-     * the 2.0× structural cap (200). The on-chain baseline (100) is the default
-     * state and can only be overridden upward by the authorized relayer.
+     * The value must stay within [100, 200] — 100 is the neutral baseline and
+     * 200 the 2.0× structural cap. Allowing exactly 100 lets the relayer reset
+     * the multiplier back to neutral when macro conditions calm (mean reversion),
+     * not just raise it.
      */
     function setExternalChaosMultiplier(uint8 _newMultiplier) external onlyFactoryOwner {
         require(
-            _newMultiplier > 100 && _newMultiplier <= 200,
-            "DynamicFeePool: multiplier must be in range (100, 200]"
+            _newMultiplier >= 100 && _newMultiplier <= 200,
+            "DynamicFeePool: multiplier must be in range [100, 200]"
         );
         externalChaosMultiplier = _newMultiplier;
         emit ExternalMultiplierUpdated(_newMultiplier, block.timestamp);
@@ -171,7 +173,7 @@ contract DynamicFeePool {
     function addLiquidity(
         uint256 amount0Desired,
         uint256 amount1Desired
-    ) external returns (uint256 liquidity) {
+    ) external nonReentrant returns (uint256 liquidity) {
         uint256 r0 = uint256(reserve0);
         uint256 r1 = uint256(reserve1);
 
@@ -217,7 +219,7 @@ contract DynamicFeePool {
      */
     function removeLiquidity(
         uint256 lpTokenAmount
-    ) external returns (uint256 amount0, uint256 amount1) {
+    ) external nonReentrant returns (uint256 amount0, uint256 amount1) {
         if (lpTokenAmount == 0) revert ZeroLiquidity();
 
         uint256 totalSupply = lpToken.totalSupply();
@@ -263,7 +265,7 @@ contract DynamicFeePool {
         uint256 amountIn,
         address tokenIn,
         uint256 minAmountOut
-    ) external returns (uint256 amountOut) {
+    ) external nonReentrant returns (uint256 amountOut) {
         bool zeroForOne = (tokenIn == token0);
         if (!zeroForOne && tokenIn != token1) revert InvalidToken(tokenIn);
 

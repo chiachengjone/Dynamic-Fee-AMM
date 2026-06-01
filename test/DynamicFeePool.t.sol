@@ -220,4 +220,34 @@ contract DynamicFeePoolTest is Test {
         (uint256 feeBps,) = _captureFeeUpdated();
         assertEq(feeBps, 45, "1.5x multiplier on quiet market must yield 45 bps (BASE_FEE * 1.5)");
     }
+
+    // -------------------------------------------------------------------------
+    // Test 7 — Multiplier mean reversion back to neutral
+    // -------------------------------------------------------------------------
+
+    // The relayer must be able to RESET the multiplier to its neutral baseline
+    // (100) once macro stress subsides — not just raise it. Raise to 180, then
+    // bring it back to 100 and confirm both writes stick and that 100 is accepted.
+    function test_MultiplierCanRevertToNeutral() public {
+        pool.setExternalChaosMultiplier(180);
+        assertEq(pool.externalChaosMultiplier(), 180, "multiplier should raise to 180");
+
+        // Mean reversion: 100 must now be a valid write (boundary is inclusive).
+        pool.setExternalChaosMultiplier(100);
+        assertEq(pool.externalChaosMultiplier(), 100, "multiplier must reset to neutral 100");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 8 — Out-of-range multipliers still revert
+    // -------------------------------------------------------------------------
+
+    // The inclusive [100, 200] bound must still reject 99 (below floor) and
+    // 201 (above the 2.0x structural cap).
+    function test_MultiplierRejectsOutOfRange() public {
+        vm.expectRevert(bytes("DynamicFeePool: multiplier must be in range [100, 200]"));
+        pool.setExternalChaosMultiplier(99);
+
+        vm.expectRevert(bytes("DynamicFeePool: multiplier must be in range [100, 200]"));
+        pool.setExternalChaosMultiplier(201);
+    }
 }
