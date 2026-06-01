@@ -244,10 +244,10 @@ contract DynamicFeePoolTest is Test {
     // The inclusive [100, 200] bound must still reject 99 (below floor) and
     // 201 (above the 2.0x structural cap).
     function test_MultiplierRejectsOutOfRange() public {
-        vm.expectRevert(bytes("DynamicFeePool: multiplier must be in range [100, 200]"));
+        vm.expectRevert(abi.encodeWithSelector(DynamicFeePool.MultiplierOutOfRange.selector, uint8(99)));
         pool.setExternalChaosMultiplier(99);
 
-        vm.expectRevert(bytes("DynamicFeePool: multiplier must be in range [100, 200]"));
+        vm.expectRevert(abi.encodeWithSelector(DynamicFeePool.MultiplierOutOfRange.selector, uint8(201)));
         pool.setExternalChaosMultiplier(201);
     }
 }

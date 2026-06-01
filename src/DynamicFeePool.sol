@@ -146,10 +146,7 @@ contract DynamicFeePool is ReentrancyGuard {
      * not just raise it.
      */
     function setExternalChaosMultiplier(uint8 _newMultiplier) external onlyFactoryOwner {
-        require(
-            _newMultiplier >= 100 && _newMultiplier <= 200,
-            "DynamicFeePool: multiplier must be in range [100, 200]"
-        );
+        if (_newMultiplier < 100 || _newMultiplier > 200) revert MultiplierOutOfRange(_newMultiplier);
         externalChaosMultiplier = _newMultiplier;
         emit ExternalMultiplierUpdated(_newMultiplier, block.timestamp);
     }
