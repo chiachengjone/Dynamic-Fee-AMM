@@ -8,13 +8,18 @@ import "../src/LPToken.sol";
 import "./helpers/MockERC20.sol";
 
 /**
- * Phase 3 backtesting suite for DynamicFeePool's volatility fee engine.
+ * Backtesting suite for DynamicFeePool's volatility fee engine and Phase 5
+ * macro telemetry access-control layer.
  *
- * Each test targets one specific boundary of the dynamic fee model:
+ * Phase 3 tests (1–4):
  *   1. Full volatility decay → fee returns to BASE_FEE floor
  *   2. Same-block HFT cascades → fee escalates monotonically
  *   3. 80% whale trade → fee is clamped precisely at MAX_FEE ceiling
  *   4. One half-life elapsed → accumulator decays by exactly 50%
+ *
+ * Phase 5 tests (5–6):
+ *   5. Unauthorized actor cannot alter the chaos multiplier
+ *   6. 1.5× multiplier proportionally scales the quiet-market fee
  */
 contract DynamicFeePoolTest is Test {
     PoolFactory    public factory;
@@ -162,5 +167,57 @@ contract DynamicFeePoolTest is Test {
 
         // vol1 >> 1 = vol1 / 2; allow ±2 for any dust priceImpact rounding.
         assertApproxEqAbs(vol2, vol1 / 2, 2, "volatility must halve after one DECAY_HALFLIFE");
+    }
+
+    // =========================================================================
+    // Phase 5 — Macro telemetry access control & fee scaling
+    // =========================================================================
+
+    // -------------------------------------------------------------------------
+    // Test 5 — Unauthorized actor is rejected by the onlyFactoryOwner modifier
+    // -------------------------------------------------------------------------
+
+    // The pool's poolAdmin is the factory owner (address(this) in tests).
+    // Any other address — even a realistic-looking EOA — must be strictly rejected.
+    // This confirms the access-control modifier guards the entire setter path.
+    function test_OnlyOwnerCanSetMultiplier() public {
+        address rogue = address(0xBAD);
+
+        // Rogue call must revert with the Unauthorized() custom error.
+        vm.prank(rogue);
+        vm.expectRevert(DynamicFeePool.Unauthorized.selector);
+        pool.setExternalChaosMultiplier(150);
+
+        // Confirm state was not modified by the rejected call.
+        assertEq(pool.externalChaosMultiplier(), 100, "multiplier must remain at neutral baseline");
+
+        // The test contract is the factory owner and must succeed.
+        pool.setExternalChaosMultiplier(150);
+        assertEq(pool.externalChaosMultiplier(), 150, "authorized owner must be able to set multiplier");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 6 — 1.5× chaos multiplier proportionally amplifies the quiet-market fee
+    // -------------------------------------------------------------------------
+
+    // Under neutral market conditions (no prior swaps → zero volatility accumulator),
+    // the base fee is exactly BASE_FEE (30 bps). Applying a 1.5× chaos multiplier
+    // must yield 30 * 150 / 100 = 45 bps — no more, no less.
+    //
+    // This verifies: (a) the multiplier is read inside calculateDynamicFee,
+    //                (b) the integer division is exact for the 150 case,
+    //                (c) the result stays below MAX_FEE and is not over-clamped.
+    function test_MultiplierClampingMath() public {
+        // Set the chaos multiplier to 1.5× as the authorized owner.
+        pool.setExternalChaosMultiplier(150);
+
+        // Fresh pool: cumulativeVolatilityTracker == 0 and lastTransactionTimestamp == 0.
+        // timeElapsed >> DECAY_HALFLIFE → decayedVolatility = 0. Dust priceImpact = 0.
+        // rawFee = BASE_FEE = 30. scaledFee = 30 * 150 / 100 = 45.
+        vm.recordLogs();
+        pool.swap(1e12, address(token0), 0);
+
+        (uint256 feeBps,) = _captureFeeUpdated();
+        assertEq(feeBps, 45, "1.5x multiplier on quiet market must yield 45 bps (BASE_FEE * 1.5)");
     }
 }
