@@ -47,6 +47,10 @@ interface WalletState {
   error: string | null;
   targetChainId: number;
   connect: () => Promise<void>;
+  /** Opens MetaMask's account picker so the user can choose a different account. */
+  switchAccount: () => Promise<void>;
+  /** Clears local connection state (MetaMask permissions must be revoked from the extension). */
+  disconnect: () => void;
   switchNetwork: () => Promise<void>;
   /** Returns an ethers signer for the connected account. */
   getSigner: () => Promise<ethers.JsonRpcSigner>;
@@ -57,10 +61,10 @@ const WalletCtx = createContext<WalletState | null>(null);
 export function WalletProvider({ children }: { children: ReactNode }) {
   const hasWallet = typeof window !== "undefined" && !!window.ethereum;
 
-  const [account, setAccount]     = useState<string | null>(null);
-  const [chainId, setChainId]     = useState<number | null>(null);
+  const [account, setAccount]       = useState<string | null>(null);
+  const [chainId, setChainId]       = useState<number | null>(null);
   const [connecting, setConnecting] = useState(false);
-  const [error, setError]         = useState<string | null>(null);
+  const [error, setError]           = useState<string | null>(null);
 
   // ── Provider helper ───────────────────────────────────────────────────────
   const getBrowserProvider = useCallback(() => {
@@ -143,6 +147,38 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [hasWallet, getBrowserProvider]);
 
+  // ── Switch account (opens MetaMask account picker) ────────────────────────
+  const switchAccount = useCallback(async () => {
+    if (!hasWallet) return;
+    setConnecting(true);
+    setError(null);
+    try {
+      // wallet_requestPermissions opens the account picker in MetaMask.
+      // The accountsChanged event fires after the user confirms, so the
+      // existing listener handles updating account state.
+      await window.ethereum!.request({
+        method: "wallet_requestPermissions",
+        params: [{ eth_accounts: {} }],
+      });
+    } catch (err: unknown) {
+      // User cancelled — not an error worth surfacing.
+      const code = (err as { code?: number })?.code;
+      if (code !== 4001) {
+        setError((err as { message?: string })?.message ?? "Switch rejected");
+      }
+    } finally {
+      setConnecting(false);
+    }
+  }, [hasWallet]);
+
+  // ── Disconnect (clears local state only) ─────────────────────────────────
+  const disconnect = useCallback(() => {
+    setAccount(null);
+    setError(null);
+    // MetaMask doesn't expose a programmatic revoke API from the dapp side;
+    // the user can revoke via MetaMask > Connected Sites if needed.
+  }, []);
+
   // ── Switch / add network ──────────────────────────────────────────────────
   const switchNetwork = useCallback(async () => {
     if (!hasWallet) return;
@@ -179,10 +215,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       error,
       targetChainId: TARGET_CHAIN_ID,
       connect,
+      switchAccount,
+      disconnect,
       switchNetwork,
       getSigner,
     }),
-    [account, chainId, connecting, hasWallet, error, connect, switchNetwork, getSigner],
+    [account, chainId, connecting, hasWallet, error, connect, switchAccount, disconnect, switchNetwork, getSigner],
   );
 
   return <WalletCtx.Provider value={value}>{children}</WalletCtx.Provider>;
