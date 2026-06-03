@@ -26,21 +26,17 @@ interface Props {
   quoteToken: TokenConfig;
 }
 
-// ─── Fee response curve ────────────────────────────────────────────────────────
-
 function buildCurveData(state: PoolDataState) {
   const { reserve0, volatility, lastTimestamp, externalChaosMultiplier } = state;
   const timeElapsed = Math.max(0, Math.floor(Date.now() / 1000) - lastTimestamp);
   return Array.from({ length: 41 }, (_, i) => {
-    const pct = i * 2; // 0 → 80 in steps of 2
+    const pct = i * 2;
     const amt = (reserve0 * BigInt(pct)) / 100n;
     const base   = calculateDynamicFee({ amountIn: amt, reserveIn: reserve0, volatility, timeElapsed, multiplier: 100 });
     const scaled = calculateDynamicFee({ amountIn: amt, reserveIn: reserve0, volatility, timeElapsed, multiplier: externalChaosMultiplier });
     return { size: pct, base: Number(base.feeBps), scaled: Number(scaled.feeBps) };
   });
 }
-
-// ─── Shared chart theme ────────────────────────────────────────────────────────
 
 const AXIS = {
   tick: { fill: "#64748b", fontSize: 11 },
@@ -49,12 +45,10 @@ const AXIS = {
 };
 const TT_STYLE = {
   contentStyle: {
-    background: "#0f172a", border: "1px solid #1e293b",
+    background: "#0f172a", border: "1px solid #334155",
     borderRadius: 12, fontSize: 12, color: "#e2e8f0",
   },
 };
-
-// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function PairTelemetryChart({ state, feeHistory, baseToken, quoteToken }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>("history");
@@ -65,19 +59,21 @@ export default function PairTelemetryChart({ state, feeHistory, baseToken, quote
   );
 
   return (
-    <div className="flex h-full flex-col rounded-2xl bg-slate-900/60 ring-1 ring-white/10 backdrop-blur">
+    <div className="flex h-full flex-col rounded-3xl bg-card/80 backdrop-blur-xl border border-border/50 shadow-2xl">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-white/5 px-5 pt-5 pb-0">
+      <div className="flex items-center justify-between border-b border-border/30 px-5 pt-5 pb-0">
         <div className="flex items-center gap-2">
-          <TrendingUp className="h-4 w-4 text-fuchsia-300" />
-          <h2 className="text-sm font-semibold text-slate-200">
+          <div className="w-7 h-7 bg-gradient-to-r from-purple-500/20 to-fuchsia-500/20 border border-purple-500/30 rounded-lg flex items-center justify-center">
+            <TrendingUp className="h-3.5 w-3.5 text-purple-300" />
+          </div>
+          <h2 className="text-sm font-semibold text-foreground">
             {baseToken.symbol}
-            <span className="mx-1 text-slate-500">/</span>
+            <span className="mx-1 text-muted-foreground">/</span>
             {quoteToken.symbol}
-            <span className="ml-2 text-slate-500 font-normal">Analytics</span>
+            <span className="ml-2 text-muted-foreground font-normal">Analytics</span>
           </h2>
         </div>
-        <div className="flex gap-1 rounded-lg bg-slate-950/60 p-1">
+        <div className="flex gap-1 rounded-xl bg-muted/50 border border-border/30 p-1">
           <TabBtn active={activeTab === "history"} onClick={() => setActiveTab("history")} label="Trade History" />
           <TabBtn active={activeTab === "curve"}   onClick={() => setActiveTab("curve")}   label="Fee Curve"     />
         </div>
@@ -93,27 +89,23 @@ export default function PairTelemetryChart({ state, feeHistory, baseToken, quote
   );
 }
 
-// ─── Trade History ─────────────────────────────────────────────────────────────
-
 function HistoryChart({
   feeHistory, baseToken, quoteToken,
 }: { feeHistory: FeeHistoryPoint[]; baseToken: TokenConfig; quoteToken: TokenConfig }) {
   if (feeHistory.length === 0) {
     return (
-      <div className="flex h-72 flex-col items-center justify-center gap-3 text-slate-500">
+      <div className="flex h-72 flex-col items-center justify-center gap-3 text-muted-foreground">
         <Activity className="h-8 w-8 opacity-30" />
         <p className="text-sm">
           No trades yet for {baseToken.symbol} / {quoteToken.symbol}.
         </p>
-        <p className="text-xs">Simulate a swap to see fee and volatility telemetry.</p>
+        <p className="text-xs text-muted-foreground/60">Simulate a swap to see fee and volatility telemetry.</p>
       </div>
     );
   }
 
   const maxVol   = Math.max(...feeHistory.map((p) => p.volatility), 1);
-  const chartData = feeHistory.map((p) => ({
-    ...p, volNorm: (p.volatility / maxVol) * 150,
-  }));
+  const chartData = feeHistory.map((p) => ({ ...p, volNorm: (p.volatility / maxVol) * 150 }));
 
   return (
     <div className="h-72 w-full">
@@ -125,8 +117,8 @@ function HistoryChart({
               <stop offset="100%" stopColor="#f59e0b" stopOpacity={0}    />
             </linearGradient>
             <linearGradient id="hBase" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%"   stopColor="#38bdf8" stopOpacity={0.25} />
-              <stop offset="100%" stopColor="#38bdf8" stopOpacity={0}    />
+              <stop offset="0%"   stopColor="#3b82f6" stopOpacity={0.25} />
+              <stop offset="100%" stopColor="#3b82f6" stopOpacity={0}    />
             </linearGradient>
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -146,33 +138,31 @@ function HistoryChart({
             }
             wrapperStyle={{ fontSize: 12, color: "#94a3b8" }}
           />
-          <Area type="monotone" dataKey="baseFeeBps" stroke="#38bdf8" strokeWidth={1.5} fill="url(#hBase)" dot={false} />
+          <Area type="monotone" dataKey="baseFeeBps" stroke="#3b82f6" strokeWidth={1.5} fill="url(#hBase)" dot={false} />
           <Area type="monotone" dataKey="feeBps"     stroke="#f59e0b" strokeWidth={2}   fill="url(#hFee)"  dot={false} />
-          <Line type="monotone" dataKey="volNorm"    stroke="#d946ef" strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
+          <Line type="monotone" dataKey="volNorm"    stroke="#a855f7" strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
         </ComposedChart>
       </ResponsiveContainer>
     </div>
   );
 }
 
-// ─── Fee Response Curve ────────────────────────────────────────────────────────
-
 function CurveChart({ data, multiplier }: { data: { size: number; base: number; scaled: number }[]; multiplier: number }) {
   return (
     <div className="h-72 w-full">
       <div className="mb-2 flex justify-end">
-        <span className="text-xs text-slate-500">base 1.0× vs current {(multiplier / 100).toFixed(2)}×</span>
+        <span className="text-xs text-muted-foreground">base 1.0× vs current {(multiplier / 100).toFixed(2)}×</span>
       </div>
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
           <defs>
             <linearGradient id="cScaled" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%"   stopColor="#d946ef" stopOpacity={0.35} />
-              <stop offset="100%" stopColor="#d946ef" stopOpacity={0}    />
+              <stop offset="0%"   stopColor="#a855f7" stopOpacity={0.35} />
+              <stop offset="100%" stopColor="#a855f7" stopOpacity={0}    />
             </linearGradient>
             <linearGradient id="cBase" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%"   stopColor="#38bdf8" stopOpacity={0.25} />
-              <stop offset="100%" stopColor="#38bdf8" stopOpacity={0}    />
+              <stop offset="0%"   stopColor="#3b82f6" stopOpacity={0.25} />
+              <stop offset="100%" stopColor="#3b82f6" stopOpacity={0}    />
             </linearGradient>
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -189,23 +179,23 @@ function CurveChart({ data, multiplier }: { data: { size: number; base: number; 
             formatter={(n: string) => n === "scaled" ? "Current (macro-scaled)" : "Base (1.0×)"}
             wrapperStyle={{ fontSize: 12, color: "#94a3b8" }}
           />
-          <Area type="monotone" dataKey="base"   stroke="#38bdf8" strokeWidth={2} fill="url(#cBase)"   dot={false} />
-          <Area type="monotone" dataKey="scaled" stroke="#d946ef" strokeWidth={2} fill="url(#cScaled)" dot={false} />
+          <Area type="monotone" dataKey="base"   stroke="#3b82f6" strokeWidth={2} fill="url(#cBase)"   dot={false} />
+          <Area type="monotone" dataKey="scaled" stroke="#a855f7" strokeWidth={2} fill="url(#cScaled)" dot={false} />
         </AreaChart>
       </ResponsiveContainer>
     </div>
   );
 }
 
-// ─── Tab button ───────────────────────────────────────────────────────────────
-
 function TabBtn({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
   return (
     <button
       onClick={onClick}
       className={cn(
-        "rounded-md px-3 py-1.5 text-xs font-medium transition",
-        active ? "bg-slate-800 text-slate-100 shadow" : "text-slate-500 hover:text-slate-300",
+        "rounded-lg px-3 py-1.5 text-xs font-medium transition",
+        active
+          ? "bg-gradient-to-r from-blue-500/20 to-purple-500/20 text-foreground border border-border/50 shadow"
+          : "text-muted-foreground hover:text-foreground",
       )}
     >
       {label}

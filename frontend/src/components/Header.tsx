@@ -1,3 +1,4 @@
+import { motion } from "framer-motion";
 import { Activity, RefreshCw, Radio, FlaskConical, Wallet } from "lucide-react";
 import { cn } from "../lib/cn.js";
 import { useWallet } from "../wallet/WalletContext.js";
@@ -23,16 +24,25 @@ export default function Header({
   const wallet = useWallet();
 
   return (
-    <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <motion.header
+      className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
+      initial={{ opacity: 0, y: -16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: "spring", stiffness: 300, damping: 30 }}
+    >
       <div className="flex items-center gap-3">
-        <div className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-sky-500/20 to-fuchsia-500/20 ring-1 ring-white/10">
-          <Activity className="h-6 w-6 text-sky-300" />
-        </div>
+        <motion.div
+          className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-blue-500/20 to-purple-500/20 border border-border/50"
+          whileHover={{ scale: 1.1, rotate: 5 }}
+          transition={{ type: "spring", stiffness: 400, damping: 25 }}
+        >
+          <Activity className="h-6 w-6 text-blue-300" />
+        </motion.div>
         <div>
-          <h1 className="text-lg font-semibold tracking-tight text-slate-100">
-            Dynamic-Fee-AMM <span className="text-slate-400">· Macro Console</span>
+          <h1 className="text-lg font-bold tracking-tight text-foreground">
+            Dynamic-Fee-AMM <span className="text-muted-foreground font-normal">· Macro Console</span>
           </h1>
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-muted-foreground">
             Volatility-responsive fees scaled by off-chain macro telemetry
           </p>
         </div>
@@ -41,10 +51,10 @@ export default function Header({
       <div className="flex flex-wrap items-center gap-3">
         <div
           className={cn(
-            "flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ring-1",
+            "flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium border",
             isLive
-              ? "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30"
-              : "bg-amber-500/10  text-amber-300  ring-amber-500/30",
+              ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
+              : "bg-amber-500/10  text-amber-300  border-amber-500/30",
           )}
           title={
             isLive
@@ -65,27 +75,28 @@ export default function Header({
         </div>
 
         {hasLiveConfig && (
-          <button
+          <motion.button
             onClick={onRefresh}
             disabled={connecting}
-            className="flex items-center gap-2 rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300 ring-1 ring-white/10 transition hover:bg-white/10 disabled:opacity-50"
+            className="flex items-center gap-2 rounded-full bg-muted/50 border border-border/50 px-3 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-50"
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
           >
             <RefreshCw className={cn("h-3.5 w-3.5", connecting && "animate-spin")} />
             {connecting ? "Syncing" : "Refresh"}
-          </button>
+          </motion.button>
         )}
 
         {lastSync && (
-          <span className="hidden text-[11px] text-slate-500 sm:inline">
+          <span className="hidden text-[11px] text-muted-foreground sm:inline">
             synced {lastSync.toLocaleTimeString()}
           </span>
         )}
 
-        {/* Wallet — only relevant when connected to a live chain */}
         {hasLiveConfig && wallet.hasWallet && (
           wallet.account ? (
             <div
-              className="flex items-center gap-2 rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-200 ring-1 ring-white/10"
+              className="flex items-center gap-2 rounded-full bg-muted/50 border border-border/50 px-3 py-1.5 text-xs font-medium text-foreground"
               title={
                 wallet.isCorrectNetwork
                   ? `Connected · ${wallet.account}`
@@ -101,17 +112,19 @@ export default function Header({
               {shortAddr(wallet.account)}
             </div>
           ) : (
-            <button
+            <motion.button
               onClick={wallet.connect}
               disabled={wallet.connecting}
-              className="flex items-center gap-2 rounded-full bg-sky-500/15 px-3 py-1.5 text-xs font-medium text-sky-300 ring-1 ring-sky-500/30 transition hover:bg-sky-500/25 disabled:opacity-50"
+              className="flex items-center gap-2 rounded-full bg-gradient-to-r from-blue-500/20 to-purple-500/20 border border-blue-500/30 px-3 py-1.5 text-xs font-medium text-blue-300 transition hover:from-blue-500/30 hover:to-purple-500/30 disabled:opacity-50"
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
             >
               <Wallet className="h-3.5 w-3.5" />
               {wallet.connecting ? "Connecting…" : "Connect Wallet"}
-            </button>
+            </motion.button>
           )
         )}
       </div>
-    </header>
+    </motion.header>
   );
 }

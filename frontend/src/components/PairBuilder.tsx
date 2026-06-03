@@ -1,64 +1,40 @@
+import { motion } from "framer-motion";
 import { ArrowLeftRight } from "lucide-react";
 import TokenSelector from "./TokenSelector.js";
 import type { TokenConfig } from "../config/tokenRegistry.js";
 
 interface PairBuilderProps {
-  baseToken:        TokenConfig;
-  quoteToken:       TokenConfig;
-  onBaseChange:     (token: TokenConfig) => void;
-  onQuoteChange:    (token: TokenConfig) => void;
+  baseToken:     TokenConfig;
+  quoteToken:    TokenConfig;
+  onBaseChange:  (token: TokenConfig) => void;
+  onQuoteChange: (token: TokenConfig) => void;
 }
 
-/**
- * Inline pair builder — two independent TokenSelector dropdowns with a swap
- * button between them. Lives directly on the dashboard layout (not inside the
- * header) so it's the first thing users interact with when exploring pairs.
- *
- * Changing either dropdown immediately updates App root state, which triggers
- * usePairPoolState to tear down the previous pair's listeners and initialise
- * the new pair. The ⇄ button inverts base and quote in one click.
- */
-export default function PairBuilder({
-  baseToken,
-  quoteToken,
-  onBaseChange,
-  onQuoteChange,
-}: PairBuilderProps) {
+export default function PairBuilder({ baseToken, quoteToken, onBaseChange, onQuoteChange }: PairBuilderProps) {
   function swapDirection() {
-    // Swap base ↔ quote; each sandbox store entry remains keyed by its own
-    // directional pairId, so the inverted pair initialises fresh.
     onBaseChange(quoteToken);
     onQuoteChange(baseToken);
   }
 
   return (
     <div className="flex flex-wrap items-end gap-3">
-      <TokenSelector
-        label="Base token"
-        value={baseToken}
-        exclude={quoteToken}
-        onChange={onBaseChange}
-      />
+      <TokenSelector label="Base token" value={baseToken} exclude={quoteToken} onChange={onBaseChange} />
 
-      {/* Divider slash */}
-      <span className="mb-3 text-xl font-light text-slate-600 select-none">/</span>
+      <span className="mb-3 text-xl font-light text-muted-foreground/40 select-none">/</span>
 
-      <TokenSelector
-        label="Quote token"
-        value={quoteToken}
-        exclude={baseToken}
-        onChange={onQuoteChange}
-      />
+      <TokenSelector label="Quote token" value={quoteToken} exclude={baseToken} onChange={onQuoteChange} />
 
-      {/* Swap direction */}
-      <button
+      <motion.button
         onClick={swapDirection}
         title="Swap base ↔ quote"
-        className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-800 text-slate-400 ring-1 ring-white/10 transition hover:bg-slate-700 hover:text-slate-200"
+        className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-border/50 text-muted-foreground transition hover:from-blue-500/20 hover:to-purple-500/20 hover:text-blue-300"
         aria-label="Swap base and quote tokens"
+        whileHover={{ scale: 1.05, rotate: 180 }}
+        whileTap={{ scale: 0.95 }}
+        transition={{ type: "spring", stiffness: 300, damping: 25 }}
       >
         <ArrowLeftRight className="h-4 w-4" />
-      </button>
+      </motion.button>
     </div>
   );
 }
